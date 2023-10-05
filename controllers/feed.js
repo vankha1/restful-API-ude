@@ -2,15 +2,18 @@ const fs = require("fs");
 const path = require("path");
 const { validationResult } = require("express-validator");
 
+const io = require("../socket");
 const Post = require("../models/post");
 const User = require("../models/user");
 
 exports.getPosts = async (req, res, next) => {
   const currentPage = req.query.page || 1;
   const perPage = 2;
-  const totalItems = await Post.find().countDocuments();
   try {
-    const posts = await Post.find().populate('creator')
+    const totalItems = await Post.find().countDocuments();
+    const posts = await Post.find()
+      .populate("creator")
+      .sort({ createdAt : -1 })
       .skip((currentPage - 1) * perPage) // remove (currentPage - 1) * perPage documents before, so it also means get the document whose index (currentPage - 1) * perPage
       .limit(perPage);
 
@@ -44,7 +47,6 @@ exports.createPost = async (req, res, next) => {
   console.log(imageUrl);
   const title = req.body.title;
   const content = req.body.content;
-  let creator;
   // Create a new post in db
   const post = new Post({
     title: title,
@@ -58,6 +60,15 @@ exports.createPost = async (req, res, next) => {
     // Here we have an authenticated user who has his/her posts
     user.posts.push(post);
     await user.save();
+    // event name : posts and the object with action or post depend on you, it is not forced by socket.io
+    io.getIO().emit("posts", {
+      action: "create",
+      // post : post // we missing the creator name
+      post: {
+        ...post.toObject(),
+        creator: { _id: req.userId, name: user.name },
+      },
+    });
     res.status(201).json({
       message: "Create a new post successfully",
       post: post,
@@ -76,7 +87,7 @@ exports.createPost = async (req, res, next) => {
 
 exports.getPost = async (req, res, next) => {
   const postId = req.params.postId;
-  const post = await Post.findById(postId);
+  const post = await Post.findById(postId).populate("creator");
   try {
     if (!post) {
       const error = new Error("No post found !!!");
@@ -116,14 +127,14 @@ exports.updatePost = async (req, res, next) => {
     throw error;
   }
 
-  const post = await Post.findById(postId);
+  const post = await Post.findById(postId).populate("creator");
   try {
     if (!post) {
       const error = new Error("No post found !!!");
       error.statusCode = 404;
       throw error;
     }
-    if (post.creator.toString() !== req.userId) {
+    if (post.creator._id.toString() !== req.userId) {
       const error = new Error("Not authenticated");
       error.statusCode = 403;
       throw error;
@@ -136,6 +147,7 @@ exports.updatePost = async (req, res, next) => {
     post.content = content;
     post.imageUrl = imageUrl;
     const result = await post.save();
+    io.getIO().emit("posts", { action: "update", post: result });
     res.status(201).json({ message: "Updated successfully", post: result });
   } catch (err) {
     if (!err.statusCode) {
@@ -164,7 +176,7 @@ exports.deletePost = async (req, res, next) => {
     const user = await User.findById(req.userId);
     user.posts.pull(postId); // pull relation after deleting
     await user.save();
-
+    io.getIO().emit('posts', { action : 'delete', post: postId})
     res.status(200).json({ message: "Deleted Successfully !!!" });
   } catch (err) {
     if (!err.statusCode) {
