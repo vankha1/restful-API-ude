@@ -4,9 +4,9 @@ const path = require("path");
 const mongoose = require("mongoose");
 const multer = require("multer");
 const { v4: uuidv4 } = require("uuid");
-
-const feedRoutes = require("./routes/feed");
-const authRoutes = require("./routes/auth");
+const { graphqlHTTP } = require('express-graphql');
+const graphqlSchema = require("./graphql/schema");
+const graphqlResolvers = require("./graphql/resolvers");
 
 const app = express();
 
@@ -45,11 +45,31 @@ app.use((req, res, next) => {
     "GET, POST, PUT, PATCH, DELETE"
   );
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  // Avoid Method Not Allowed of GraphQL
+  if (req.method === 'OPTIONS'){
+    return res.sendStatus(200)
+  }
   next();
 });
 
-app.use("/feed", feedRoutes);
-app.use("/auth", authRoutes);
+// only endpoint of graphql we have
+app.use(
+  "/graphql",
+  graphqlHTTP({
+    schema: graphqlSchema,
+    rootValue: graphqlResolvers,
+    graphiql : true, // testing
+    customFormatErrorFn(err){
+      if (!err.originalError){
+        return err
+      }
+      const data = err.originalError.data;
+      const message = err.message || 'An error occurred'
+      const code = err.originalError.code || 500;
+      return { message : message, code : code, data : data}
+    }
+  })
+);
 
 // This middleware will be executed when an error is thrown or forwarded with next
 app.use((error, req, res, next) => {
@@ -63,12 +83,6 @@ app.use((error, req, res, next) => {
 mongoose
   .connect("mongodb://localhost:27017")
   .then((result) => {
-    const server = app.listen(8080); // listen method returns us a new node server. This server uses http
-    const io = require("./socket").init(server); // set up socket.io, we used that http server to establish our web socket connection
-
-    // Connect with client
-    io.on("connection", (socket) => {
-      console.log("Client connected !!!");
-    });
+    app.listen(8080);
   })
   .catch((err) => console.log(err));
